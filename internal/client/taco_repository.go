@@ -312,11 +312,11 @@ func (r *TacoRepository) batchWrite(ctx context.Context, table string, requests 
 func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) ([]MeasureItem, error) {
     var items []MeasureItem
     defaultMeasure := MeasureItem{
-        MeasureName:    "grama",
+        MeasureName:    BaseMeasureGram,
         DisplayName:    "Grama (1g)",
         GramEquivalent: 1.0,
     }
-    items = append(items, defaultMeasure)
+    liquid := false
 
     // Get food name to determine category and add appropriate measures
     foodKey := map[string]types.AttributeValue{
@@ -334,8 +334,18 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
         err = attributevalue.UnmarshalMap(foodResult.Item, &food)
         if err == nil {
             foodName := strings.ToLower(food.OriginalName)
+            liquid = IsLiquid(food.OriginalName)
+            if liquid {
+                defaultMeasure = MeasureItem{
+                    MeasureName:    BaseMeasureMl,
+                    DisplayName:    "Mililitro (1mL)",
+                    GramEquivalent: 1.0,
+                }
+            }
             // Add measures based on food name keywords for categories
-            if isFruit(foodName) {
+            if liquid {
+                // liquidos usam apenas mL e as medidas caseiras do banco
+            } else if isFruit(foodName) {
                 fruitMeasures := []MeasureItem{
                     {FoodID: foodID, MeasureName: "fatia pequena (30g)", MeasureQuantity: "", DisplayName: "fatia pequena (30g)", GramEquivalent: 30.0},
                     {FoodID: foodID, MeasureName: "fatia média (50g)", MeasureQuantity: "", DisplayName: "fatia média (50g)", GramEquivalent: 50.0},
@@ -356,6 +366,8 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
             }
         }
     }
+
+    items = append([]MeasureItem{defaultMeasure}, items...)
 
     keyConditionExpression := "food_id = :fid"
     expressionAttributeValues := map[string]types.AttributeValue{
@@ -409,6 +421,9 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
     // Filter dbMeasures to avoid duplicates
     var uniqueDbMeasures []MeasureItem
     for _, m := range dbMeasures {
+        if liquid && m.MeasureName == BaseMeasureGram {
+            continue
+        }
         if !existing[m.MeasureName] {
             uniqueDbMeasures = append(uniqueDbMeasures, m)
             existing[m.MeasureName] = true
@@ -468,6 +483,7 @@ func (r *TacoRepository) GetFoodWithMeasures(ctx context.Context, foodID string)
 		Id:            foodItem.FoodID,
 		Name:          foodItem.NormalizedName, 
 		Source:        foodItem.DataSource,
+		Unit:          UnitForFood(foodItem.OriginalName),
 		EnergyKcal:    foodItem.EnergyKcal,
 		ProteinG:      foodItem.ProteinG,
 		CarbohydrateG: foodItem.CarbohydrateG,
