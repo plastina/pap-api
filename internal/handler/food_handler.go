@@ -30,6 +30,7 @@ func mapTacoToFood(tacoItem client.TacoFoodItem) model.Food {
 		Id:            tacoItem.FoodID,
 		Name:          tacoItem.OriginalName,
 		Source:        source,
+		Unit:          client.UnitForFood(tacoItem.OriginalName),
 		EnergyKcal:    tacoItem.EnergyKcal,
 		ProteinG:      tacoItem.ProteinG,
 		CarbohydrateG: tacoItem.CarbohydrateG,

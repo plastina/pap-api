@@ -4,6 +4,7 @@ type Food struct {
 	Id                string             `json:"id"`
 	Name              string             `json:"name"`
 	Source            string             `json:"source"`
+	Unit              string             `json:"unit"`
 	EnergyKcal        float64            `json:"energy_kcal"`
 	ProteinG          float64            `json:"protein_g"`
 	CarbohydrateG     float64            `json:"carbohydrate_g"`
