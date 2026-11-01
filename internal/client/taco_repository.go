@@ -124,15 +124,19 @@ func NewTacoRepository(db *dynamodb.Client, tableName, searchTokensTableName str
 // searchResultLimit e o teto de alimentos distintos devolvidos pela busca.
 const searchResultLimit = 25
 
-// SearchFoodsByNamePrefix busca alimentos cujo termo casa o prefixo de
-// qualquer palavra do nome (ex.: "requeij" acha "Queijo, requeijão, cremoso").
+// SearchFoodsByNamePrefix busca alimentos em que cada palavra do termo casa o
+// prefixo de alguma palavra do nome (ex.: "requeij" acha "Queijo, requeijão,
+// cremoso"; "agua de coco" exige agua* e coco*, ignorando "de").
 //
 // A consulta e uma Query por prefixo na tabela de tokens (nunca Scan na
-// TacoFoods): particao = primeira letra do token, sort key = "<token>#<food_id>".
-// Resultados sao deduplicados por alimento e os que casam o inicio do nome
-// (primeira palavra) vem primeiro. Termo vazio devolve lista vazia.
+// TacoFoods) pelo token mais longo do termo: particao = primeira letra do
+// token, sort key = "<token>#<food_id>". Os demais tokens sao filtrados em
+// memoria pelo nome desnormalizado na linha. Resultados sao deduplicados por
+// alimento e os que casam o inicio do nome vem primeiro. Termo vazio devolve
+// lista vazia.
 func (r *TacoRepository) SearchFoodsByNamePrefix(ctx context.Context, term string) ([]TacoFoodItem, error) {
-	token := searchToken(term)
+	terms := searchTokens(term)
+	token := queryToken(terms)
 	if token == "" {
 		return []TacoFoodItem{}, nil
 	}
@@ -159,9 +163,46 @@ func (r *TacoRepository) SearchFoodsByNamePrefix(ctx context.Context, term strin
 		return nil, fmt.Errorf("erro ao fazer unmarshal dos resultados do DynamoDB: %w", err)
 	}
 
-	items := dedupeTokenRows(rows)
-	log.Printf("Busca por token '%s' retornou %d alimentos distintos", token, len(items))
+	items := dedupeTokenRows(filterRowsByTerms(rows, terms))
+	log.Printf("Busca por %v (query em '%s') retornou %d alimentos distintos", terms, token, len(items))
 	return items, nil
+}
+
+// filterRowsByTerms mantem so as linhas cujo nome tem, para cada termo, alguma
+// palavra comecando por ele. WordIndex passa a ser a posicao da palavra que
+// casa o primeiro termo, para o ranking favorecer "agua..." em "agua de coco".
+func filterRowsByTerms(rows []foodTokenItem, terms []string) []foodTokenItem {
+	out := make([]foodTokenItem, 0, len(rows))
+	for _, row := range rows {
+		words := NormalizeTokens(row.OriginalName)
+		first := -1
+		ok := true
+		for ti, t := range terms {
+			idx := prefixIndex(words, t)
+			if idx < 0 {
+				ok = false
+				break
+			}
+			if ti == 0 {
+				first = idx
+			}
+		}
+		if ok {
+			row.WordIndex = first
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// prefixIndex devolve a posicao da primeira palavra que comeca com prefix, ou -1.
+func prefixIndex(words []string, prefix string) int {
+	for i, w := range words {
+		if strings.HasPrefix(w, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 // dedupeTokenRows colapsa varias linhas de token do mesmo alimento em um item,

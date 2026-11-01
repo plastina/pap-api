@@ -30,14 +30,42 @@ func NormalizeTokens(s string) []string {
 	})
 }
 
-// searchToken reduz o termo de busca bruto ao token consultado no indice.
-// Termo vazio ou so com espacos/pontuacao retorna "".
-func searchToken(term string) string {
+// stopwords sao palavras de ligacao ignoradas na busca ("agua de coco" ->
+// agua, coco). Os tokens do indice continuam sendo gravados com elas.
+var stopwords = map[string]bool{
+	"a": true, "o": true, "as": true, "os": true, "e": true,
+	"de": true, "da": true, "do": true, "das": true, "dos": true,
+	"com": true, "sem": true, "em": true, "na": true, "no": true,
+	"para": true, "p": true,
+}
+
+// searchTokens reduz o termo de busca bruto aos tokens que o alimento precisa
+// casar (todos, como prefixo de alguma palavra do nome). Remove stopwords,
+// exceto se o termo for so stopwords. Termo vazio retorna nil.
+func searchTokens(term string) []string {
 	tokens := NormalizeTokens(term)
-	if len(tokens) == 0 {
-		return ""
+	out := make([]string, 0, len(tokens))
+	for _, tk := range tokens {
+		if !stopwords[tk] {
+			out = append(out, tk)
+		}
 	}
-	return tokens[0]
+	if len(out) == 0 {
+		return tokens
+	}
+	return out
+}
+
+// queryToken escolhe o token consultado no indice: o mais longo, por ser em
+// geral o mais seletivo, para o teto da Query nao cortar os alimentos certos.
+func queryToken(tokens []string) string {
+	best := ""
+	for _, tk := range tokens {
+		if len(tk) > len(best) {
+			best = tk
+		}
+	}
+	return best
 }
 
 // tokenPartition deriva a chave de particao de um token a partir da primeira

@@ -36,25 +36,50 @@ func TestNormalizeTokens(t *testing.T) {
 	}
 }
 
-func TestSearchToken(t *testing.T) {
+func TestSearchTokens(t *testing.T) {
 	cases := []struct {
 		in   string
-		want string
+		want []string
 	}{
-		{"", ""},
-		{"   ", ""},
-		{",;-", ""},
-		{"requeijao", "requeijao"},
-		{"Requeijão", "requeijao"},
-		{"REQUEIJAO", "requeijao"},
-		{"requeij", "requeij"},         // prefixo parcial
-		{"  queijo  ", "queijo"},       // espacos nas bordas
-		{"queijo requeijao", "queijo"}, // usa a primeira palavra
+		{"", nil},
+		{",;-", nil},
+		{"Requeijão", []string{"requeijao"}},
+		{"requeij", []string{"requeij"}},
+		{"agua de coco", []string{"agua", "coco"}}, // stopword removida
+		{"de", []string{"de"}},                     // so stopword: mantem
 	}
 	for _, c := range cases {
-		if got := searchToken(c.in); got != c.want {
-			t.Errorf("searchToken(%q) = %q, quer %q", c.in, got, c.want)
+		got := searchTokens(c.in)
+		if len(got) == 0 && len(c.want) == 0 {
+			continue
 		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("searchTokens(%q) = %v, quer %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestQueryTokenEscolheOMaisLongo(t *testing.T) {
+	if got := queryToken([]string{"agua", "coco", "verde"}); got != "verde" {
+		t.Errorf("queryToken = %q, quer verde", got)
+	}
+	if got := queryToken(nil); got != "" {
+		t.Errorf("queryToken(nil) = %q, quer vazio", got)
+	}
+}
+
+func TestFilterRowsByTermsExigeTodasAsPalavras(t *testing.T) {
+	rows := []foodTokenItem{
+		{FoodID: "tonica", OriginalName: "Água Tônica Hibisco Lata"},
+		{FoodID: "coco", OriginalName: "Água De Coco Esterilizada Kero Coco"},
+		{FoodID: "doce", OriginalName: "Doce de coco com água"},
+	}
+	got := dedupeTokenRows(filterRowsByTerms(rows, []string{"agua", "coco"}))
+	if len(got) != 2 {
+		t.Fatalf("esperava 2 alimentos, veio %d: %+v", len(got), got)
+	}
+	if got[0].FoodID != "coco" {
+		t.Errorf("esperava o nome que comeca com agua primeiro, veio %q", got[0].FoodID)
 	}
 }
 
