@@ -2,3 +2,6 @@
 
 # dump local do Open Food Facts (cmd/importoff) — varios GB, nao versionar
 /data/
+
+# relatorio do cmd/importibge
+/ibge_report.csv
