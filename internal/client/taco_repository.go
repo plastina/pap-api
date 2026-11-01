@@ -84,6 +84,21 @@ func buildFoodTokenItems(f TacoFoodItem) []foodTokenItem {
 	return items
 }
 
+// FoodTokenKeys devolve as chaves primarias (token_pl, tok) das linhas de token
+// de um alimento, as mesmas que PutFoodTokens grava. Usado para apagar o
+// indice de um alimento sem Scan na tabela de tokens.
+func FoodTokenKeys(f TacoFoodItem) []map[string]types.AttributeValue {
+	items := buildFoodTokenItems(f)
+	keys := make([]map[string]types.AttributeValue, 0, len(items))
+	for _, ti := range items {
+		keys = append(keys, map[string]types.AttributeValue{
+			"token_pl": &types.AttributeValueMemberS{Value: ti.TokenPartition},
+			"tok":      &types.AttributeValueMemberS{Value: ti.TokenSort},
+		})
+	}
+	return keys
+}
+
 type MeasureItem struct {
     FoodID          string  `json:"-" dynamodbav:"food_id"`
     MeasureName     string  `json:"measure_name" dynamodbav:"measure_name"`

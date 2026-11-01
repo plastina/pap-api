@@ -3,6 +3,8 @@ package client
 import (
 	"reflect"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 func TestNormalizeTokens(t *testing.T) {
@@ -118,5 +120,20 @@ func TestDedupeTokenRowsOrdenaPrefixoDoNomePrimeiro(t *testing.T) {
 	}
 	if got[0].FoodID != "b" {
 		t.Errorf("esperava o match de inicio de nome (b) primeiro, veio %q", got[0].FoodID)
+	}
+}
+
+func TestFoodTokenKeys(t *testing.T) {
+	keys := FoodTokenKeys(TacoFoodItem{FoodID: "abc", OriginalName: "Descrição dos alimentos dos"})
+	want := [][2]string{{"d", "descricao#abc"}, {"d", "dos#abc"}, {"a", "alimentos#abc"}}
+	if len(keys) != len(want) {
+		t.Fatalf("got %d keys, want %d", len(keys), len(want))
+	}
+	for i, w := range want {
+		pl := keys[i]["token_pl"].(*types.AttributeValueMemberS).Value
+		tok := keys[i]["tok"].(*types.AttributeValueMemberS).Value
+		if pl != w[0] || tok != w[1] {
+			t.Errorf("key %d = (%s, %s), want (%s, %s)", i, pl, tok, w[0], w[1])
+		}
 	}
 }
