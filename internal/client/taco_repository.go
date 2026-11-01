@@ -88,9 +88,15 @@ type MeasureItem struct {
     FoodID          string  `json:"-" dynamodbav:"food_id"`
     MeasureName     string  `json:"measure_name" dynamodbav:"measure_name"`
     MeasureQuantity string  `json:"measure_quantity" dynamodbav:"measure_quantity"`
-    DisplayName     string  `json:"display_name"`
+    DisplayName     string  `json:"display_name" dynamodbav:"-"`
     GramEquivalent  float64 `json:"gram_equivalent" dynamodbav:"measure_weight_g"`
+    // MeasureSource marca medidas importadas de fonte oficial (ex.: IBGE);
+    // vazio nas linhas antigas da tabela.
+    MeasureSource   string  `json:"measure_source,omitempty" dynamodbav:"measure_source,omitempty"`
 }
+
+// HouseholdMeasuresTable e a tabela das medidas caseiras (food_id + measure_name).
+const HouseholdMeasuresTable = "HouseholdMeasures"
 
 func NewTacoRepository(db *dynamodb.Client, tableName, searchTokensTableName string) *TacoRepository {
 	return &TacoRepository{
@@ -271,6 +277,41 @@ func (r *TacoRepository) PutFoodsBatch(ctx context.Context, foods []TacoFoodItem
 	return r.batchWrite(ctx, r.SearchTokensTableName, tokenRequests)
 }
 
+// CheckMeasuresKeySchema confirma que a HouseholdMeasures tem chave
+// food_id (partição) + measure_name (ordenação), para que gravar uma medida
+// sobrescreva apenas a mesma medida do mesmo alimento.
+func (r *TacoRepository) CheckMeasuresKeySchema(ctx context.Context) error {
+	out, err := r.DB.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(HouseholdMeasuresTable),
+	})
+	if err != nil {
+		return fmt.Errorf("erro ao descrever %s: %w", HouseholdMeasuresTable, err)
+	}
+	keys := map[types.KeyType]string{}
+	for _, k := range out.Table.KeySchema {
+		keys[k.KeyType] = aws.ToString(k.AttributeName)
+	}
+	if keys[types.KeyTypeHash] != "food_id" || keys[types.KeyTypeRange] != "measure_name" {
+		return fmt.Errorf("%s tem chave %v; esperado food_id (HASH) + measure_name (RANGE)", HouseholdMeasuresTable, keys)
+	}
+	return nil
+}
+
+// PutMeasuresBatch grava medidas caseiras na HouseholdMeasures, em lote.
+// Cada medida sobrescreve so a propria chave (food_id, measure_name); nada e
+// apagado. Usado pela carga do IBGE (cmd/importibge).
+func (r *TacoRepository) PutMeasuresBatch(ctx context.Context, measures []MeasureItem) error {
+	requests := make([]types.WriteRequest, 0, len(measures))
+	for _, m := range measures {
+		av, err := attributevalue.MarshalMap(m)
+		if err != nil {
+			return fmt.Errorf("erro ao serializar medida %s/%s: %w", m.FoodID, m.MeasureName, err)
+		}
+		requests = append(requests, types.WriteRequest{PutRequest: &types.PutRequest{Item: av}})
+	}
+	return r.batchWrite(ctx, HouseholdMeasuresTable, requests)
+}
+
 // batchWrite envia WriteRequests em lotes de 25, reprocessando os itens que o
 // DynamoDB devolver como UnprocessedItems com backoff exponencial (tabela
 // on-demand recem-criada costuma throttlar rajadas ate escalar a capacidade).
@@ -345,6 +386,11 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
             // Add measures based on food name keywords for categories
             if liquid {
                 // liquidos usam apenas mL e as medidas caseiras do banco
+            } else if typed := measuresForName(food.OriginalName); typed != nil {
+                for _, tm := range typed {
+                    tm.FoodID = foodID
+                    items = append(items, tm)
+                }
             } else if isFruit(foodName) {
                 fruitMeasures := []MeasureItem{
                     {FoodID: foodID, MeasureName: "fatia pequena (30g)", MeasureQuantity: "", DisplayName: "fatia pequena (30g)", GramEquivalent: 30.0},
@@ -374,7 +420,7 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
         ":fid": &types.AttributeValueMemberS{Value: foodID},
     }
     
-    projectionExpression := "food_id, measure_name, measure_quantity, measure_weight_g"
+    projectionExpression := "food_id, measure_name, measure_quantity, measure_weight_g, measure_source"
 
     log.Printf("Buscando medidas para food_id: %s", foodID)
 
@@ -412,16 +458,30 @@ func (r *TacoRepository) GetMeasuresForFood(ctx context.Context, foodID string) 
             dbMeasures[i].GramEquivalent, dbMeasures[i].DisplayName)
     }
 
+    // Medidas de fonte oficial (IBGE) no banco valem mais que as estimativas
+    // por tipo de alimento: ficam so a medida base e as do banco.
+    hasSourced := hasSourcedMeasure(dbMeasures)
+    if hasSourced {
+        items = items[:1]
+    }
+
     // Create a map of existing measure_names to avoid duplicates
     existing := make(map[string]bool)
     for _, m := range items {
         existing[m.MeasureName] = true
     }
 
+    // Alimento com medidas proprias (do seu tipo ou do IBGE) dispensa o trio
+    // generico do banco, que conflitaria (ex.: queijo "unidade" 50 g).
+    hasTypedMeasures := len(items) > 1 || hasSourced
+
     // Filter dbMeasures to avoid duplicates
     var uniqueDbMeasures []MeasureItem
     for _, m := range dbMeasures {
         if liquid && m.MeasureName == BaseMeasureGram {
+            continue
+        }
+        if hasTypedMeasures && isGenericPlaceholder(m) {
             continue
         }
         if !existing[m.MeasureName] {
